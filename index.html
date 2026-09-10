@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF Editor Studio</title>
+
+  <!-- CDNs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+
+  <style>
+    :root {
+      --bg-base: #09090b;
+      --bg-panel: #121215;
+      --bg-card: #1c1c21;
+      --border: #27272a;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --text: #f4f4f5;
+      --text-muted: #a1a1aa;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg-base); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+    header {
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      height: 48px;
+      z-index: 20;
+    }
+    .brand { font-size: 0.85rem; font-weight: 600; color: var(--text); }
+    .actions { display: flex; gap: 8px; align-items: center; }
+
+    .btn {
+      background: var(--bg-card); color: var(--text); border: 1px solid var(--border);
+      padding: 5px 12px; border-radius: 4px; font-size: 0.8rem; font-weight: 500;
+      cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 6px;
+    }
+    .btn:hover:not(:disabled) { background: #27272a; border-color: #3f3f46; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    input[type="file"] { display: none; }
+
+    main {
+      flex: 1; overflow: auto; position: relative; background: var(--bg-base);
+      display: flex; flex-direction: column; align-items: center; padding: 20px;
+    }
+    
+    .drop-zone-overlay {
+      position: absolute; inset: 0; background: rgba(9, 9, 11, 0.85);
+      border: 2px dashed var(--accent); display: flex; flex-direction: column;
+      align-items: center; justify-content: center; z-index: 50; cursor: pointer;
+    }
+    .drop-zone-overlay.dragover { background: rgba(59, 130, 246, 0.15); }
+    .drop-zone-overlay p { color: var(--text-muted); font-size: 0.85rem; margin-top: 8px; }
+
+    #pages-container { display: flex; flex-direction: column; gap: 16px; align-items: center; position: relative; }
+    
+    .page-wrapper {
+      position: relative;
+      background: #ffffff;
+      box-shadow: 0 10px 15px -3px rgba(0,0,0,0.5);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    
+    .page-wrapper canvas { display: block; }
+    
+    /* Garantir alinhamento absoluto perfeito da camada interativa Fabric */
+    .canvas-container {
+      position: absolute !important;
+      top: 0 !important;
+      left: 0 !important;
+    }
+
+    /* QUADRO MÓVEL FIXO NO VIEWPORT */
+    #stamp-box {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 220px;
+      height: 110px;
+      border: 2px dashed #a1a1aa;
+      background: rgba(24, 24, 27, 0.45);
+      backdrop-filter: blur(2px);
+      z-index: 10000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      cursor: move;
+      resize: both;
+      overflow: hidden;
+      min-width: 80px;
+      min-height: 40px;
+      border-radius: 6px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+
+    #stamp-box button {
+      background: #3f3f46;
+      color: #f4f4f5;
+      border: 1px solid #52525b;
+      padding: 6px 14px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+
+    #stamp-box button:hover { background: #52525b; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">PDF Editor Studio</div>
+    <div class="actions">
+      <label class="btn">
+        Carregar PDF
+        <input type="file" id="pdf-input" accept="application/pdf" />
+      </label>
+      <button class="btn" id="toggle-box-btn" disabled>+ Posicionar Quadro</button>
+      <button class="btn btn-primary" id="download-btn" disabled>Salvar PDF</button>
+    </div>
+  </header>
+
+  <main id="workspace">
+    <div id="drop-zone" class="drop-zone-overlay">
+      <svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+      <p>Arraste e solte o PDF aqui ou clique para selecionar</p>
+    </div>
+
+    <div id="pages-container"></div>
+  </main>
+
+  <div id="stamp-box">
+    <button id="load-png-btn">carregar PNG</button>
+  </div>
+
+  <input type="file" id="stamp-file-input" accept="image/png, image/jpeg" />
+
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+
+    let pdfArrayBuffer = null;
+    let fabricCanvases = [];
+    let pageElements = [];
+
+    const dropZone = document.getElementById('drop-zone');
+    const pdfInput = document.getElementById('pdf-input');
+    const pagesContainer = document.getElementById('pages-container');
+    const toggleBoxBtn = document.getElementById('toggle-box-btn');
+    const downloadBtn = document.getElementById('download-btn');
+    
+    const stampBox = document.getElementById('stamp-box');
+    const loadPngBtn = document.getElementById('load-png-btn');
+    const stampFileInput = document.getElementById('stamp-file-input');
+
+    dropZone.addEventListener('click', () => pdfInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files.length) handlePdfFile(e.dataTransfer.files[0]);
+    });
+    pdfInput.addEventListener('change', (e) => { if (e.target.files.length) handlePdfFile(e.target.files[0]); });
+
+    async function handlePdfFile(file) {
+      if (file.type !== 'application/pdf') return;
+      pdfArrayBuffer = await file.arrayBuffer();
+      dropZone.style.display = 'none';
+      
+      pagesContainer.innerHTML = '';
+      fabricCanvases = [];
+      pageElements = [];
+
+      const loadingTask = pdfjsLib.getDocument({ 
+        data: pdfArrayBuffer.slice(0),
+        disableWorker: true 
+      });
+      
+      const pdfDoc = await loadingTask.promise;
+
+      for (let i = 1; i <= pdfDoc.numPages; i++) {
+        await renderPage(pdfDoc, i);
+      }
+
+      toggleBoxBtn.disabled = false;
+      downloadBtn.disabled = false;
+    }
+
+    async function renderPage(pdfDoc, pageNum) {
+      const page = await pdfDoc.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 1.2 });
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'page-wrapper';
+      wrapper.style.width = `${viewport.width}px`;
+      wrapper.style.height = `${viewport.height}px`;
+
+      const pdfCanvas = document.createElement('canvas');
+      pdfCanvas.width = viewport.width;
+      pdfCanvas.height = viewport.height;
+
+      const fabricCanvasEl = document.createElement('canvas');
+
+      wrapper.appendChild(pdfCanvas);
+      wrapper.appendChild(fabricCanvasEl);
+      pagesContainer.appendChild(wrapper);
+
+      await page.render({ canvasContext: pdfCanvas.getContext('2d'), viewport }).promise;
+
+      const fCanvas = new fabric.Canvas(fabricCanvasEl, {
+        width: viewport.width,
+        height: viewport.height,
+        selection: true
+      });
+
+      fabricCanvases.push(fCanvas);
+      pageElements.push(wrapper);
+    }
+
+    toggleBoxBtn.addEventListener('click', () => {
+      stampBox.style.top = '50%';
+      stampBox.style.left = '50%';
+      stampBox.style.transform = 'translate(-50%, -50%)';
+      stampBox.style.display = 'flex';
+    });
+
+    // Mover o Quadro Flutuante
+    let isDragging = false;
+    let startX, startY, initialLeft, initialTop;
+
+    stampBox.addEventListener('mousedown', (e) => {
+      if (e.target === loadPngBtn) return;
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      
+      const rect = stampBox.getBoundingClientRect();
+      initialLeft = rect.left;
+      initialTop = rect.top;
+      
+      stampBox.style.transform = 'none';
+      stampBox.style.left = `${initialLeft}px`;
+      stampBox.style.top = `${initialTop}px`;
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      stampBox.style.left = `${initialLeft + dx}px`;
+      stampBox.style.top = `${initialTop + dy}px`;
+    });
+
+    document.addEventListener('mouseup', () => { isDragging = false; });
+
+    // Inserir Imagem no Canvas exato do PDF
+    loadPngBtn.addEventListener('click', () => stampFileInput.click());
+
+    stampFileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const boxRect = stampBox.getBoundingClientRect();
+        let inserted = false;
+
+        for (let i = 0; i < pageElements.length; i++) {
+          const pageRect = pageElements[i].getBoundingClientRect();
+
+          // Verifica se o quadro está posicionado sobre esta página
+          if (
+            boxRect.left < pageRect.right &&
+            boxRect.right > pageRect.left &&
+            boxRect.top < pageRect.bottom &&
+            boxRect.bottom > pageRect.top
+          ) {
+            const targetCanvas = fabricCanvases[i];
+
+            // Posição relativa exata no Canvas da página
+            const relativeLeft = boxRect.left - pageRect.left;
+            const relativeTop = boxRect.top - pageRect.top;
+            const targetWidth = boxRect.width;
+
+            const imgElement = new Image();
+            imgElement.src = evt.target.result;
+            
+            imgElement.onload = () => {
+              const fabricImg = new fabric.Image(imgElement, {
+                left: relativeLeft,
+                top: relativeTop,
+                cornerColor: '#3b82f6',
+                cornerStyle: 'circle',
+                borderColor: '#3b82f6',
+                cornerSize: 10,
+                transparentCorners: false,
+                hasControls: true
+              });
+
+              fabricImg.scaleToWidth(targetWidth);
+
+              targetCanvas.add(fabricImg);
+              targetCanvas.setActiveObject(fabricImg);
+              targetCanvas.requestRenderAll();
+            };
+
+            inserted = true;
+            stampBox.style.display = 'none';
+            break;
+          }
+        }
+
+        if (!inserted) {
+          alert("Posicione o quadro diretamente sobre uma página do PDF antes de carregar o PNG.");
+        }
+      };
+      reader.readAsDataURL(file);
+      e.target.value = '';
+    });
+
+    // Salvar PDF Final Modificado
+    downloadBtn.addEventListener('click', async () => {
+      if (!pdfArrayBuffer) return;
+
+      const { PDFDocument } = PDFLib;
+      const pdfDoc = await PDFDocument.load(pdfArrayBuffer);
+      const pages = pdfDoc.getPages();
+
+      for (let i = 0; i < pages.length; i++) {
+        const page = pages[i];
+        const fCanvas = fabricCanvases[i];
+        const objects = fCanvas.getObjects();
+
+        if (objects.length === 0) continue;
+
+        const pdfWidth = page.getWidth();
+        const pdfHeight = page.getHeight();
+        const scaleX = pdfWidth / fCanvas.width;
+        const scaleY = pdfHeight / fCanvas.height;
+
+        for (const obj of objects) {
+          const objectDataUrl = obj.toDataURL({ format: 'png', multiplier: 2 });
+          const pngImage = await pdfDoc.embedPng(objectDataUrl);
+          const rect = obj.getBoundingRect();
+
+          const elementWidth = rect.width * scaleX;
+          const elementHeight = rect.height * scaleY;
+          const elementX = rect.left * scaleX;
+          const elementY = pdfHeight - (rect.top * scaleY) - elementHeight;
+
+          page.drawImage(pngImage, {
+            x: elementX,
+            y: elementY,
+            width: elementWidth,
+            height: elementHeight
+          });
+        }
+      }
+
+      const pdfBytes = await pdfDoc.save();
+      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'documento_assinado.pdf';
+      link.click();
+    });
+  </script>
+</body>
+</html>
