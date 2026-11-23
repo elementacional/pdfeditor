@@ -126,8 +126,8 @@
     <div class="brand">PDF Editor Studio</div>
     <div class="actions">
       <label class="btn">
-        Carregar PDF
-        <input type="file" id="pdf-input" accept="application/pdf" />
+        Carregar PDF / JPG / PNG
+        <input type="file" id="pdf-input" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" />
       </label>
       <button class="btn" id="toggle-box-btn" disabled>+ Posicionar Quadro</button>
       <button class="btn btn-primary" id="download-btn" disabled>Salvar PDF</button>
@@ -137,7 +137,7 @@
   <main id="workspace">
     <div id="drop-zone" class="drop-zone-overlay">
       <svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
-      <p>Arraste e solte o PDF aqui ou clique para selecionar</p>
+      <p>Arraste e solte um PDF, JPG ou PNG aqui ou clique para selecionar</p>
     </div>
 
     <div id="pages-container"></div>
@@ -172,13 +172,48 @@
     dropZone.addEventListener('drop', (e) => {
       e.preventDefault();
       dropZone.classList.remove('dragover');
-      if (e.dataTransfer.files.length) handlePdfFile(e.dataTransfer.files[0]);
+      if (e.dataTransfer.files.length) handleInputFile(e.dataTransfer.files[0]);
     });
-    pdfInput.addEventListener('change', (e) => { if (e.target.files.length) handlePdfFile(e.target.files[0]); });
+    pdfInput.addEventListener('change', (e) => { if (e.target.files.length) handleInputFile(e.target.files[0]); e.target.value = ''; });
 
-    async function handlePdfFile(file) {
-      if (file.type !== 'application/pdf') return;
-      pdfArrayBuffer = await file.arrayBuffer();
+    async function handleInputFile(file) {
+      const isPdf = file.type === 'application/pdf' || /\\.pdf$/i.test(file.name);
+      const isPng = file.type === 'image/png' || /\\.png$/i.test(file.name);
+      const isJpg = file.type === 'image/jpeg' || /\\.jpe?g$/i.test(file.name);
+      if (!isPdf && !isPng && !isJpg) {
+        alert('Formato não suportado. Selecione PDF, JPG ou PNG.');
+        return;
+      }
+
+      toggleBoxBtn.disabled = true;
+      downloadBtn.disabled = true;
+      try {
+        let sourceBytes = await file.arrayBuffer();
+        if (!isPdf) {
+          // Imagens são abertas como uma página PDF em memória, preservando
+          // a camada de edição Fabric e a exportação PDF existentes.
+          const doc = await PDFLib.PDFDocument.create();
+          const image = isPng
+            ? await doc.embedPng(sourceBytes)
+            : await doc.embedJpg(sourceBytes);
+          const maxDimension = 1200;
+          const factor = Math.min(1, maxDimension / Math.max(image.width, image.height));
+          const width = image.width * factor;
+          const height = image.height * factor;
+          const page = doc.addPage([width, height]);
+          page.drawImage(image, { x: 0, y: 0, width, height });
+          sourceBytes = (await doc.save()).buffer;
+        }
+        await handlePdfDocument(sourceBytes);
+      } catch (error) {
+        console.error('Falha ao carregar documento:', error);
+        alert('Não foi possível abrir o arquivo. Verifique se ele não está danificado.');
+        if (!pdfArrayBuffer) dropZone.style.display = '';
+      }
+    }
+
+    async function handlePdfDocument(sourceBytes) {
+      pdfArrayBuffer = sourceBytes;
       dropZone.style.display = 'none';
       
       pagesContainer.innerHTML = '';
