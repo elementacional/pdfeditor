@@ -118,6 +118,9 @@
     }
 
     #stamp-box button:hover { background: #52525b; }
+    #close-stamp-btn { position:absolute;top:3px;right:3px;padding:1px 8px;background:#7f1d1d;border-color:#991b1b; }
+    .actions { flex-wrap: wrap; }
+    @media (max-width: 760px) { header { height:auto;min-height:48px; } .actions { justify-content:flex-end; } }
   </style>
 </head>
 <body>
@@ -130,6 +133,14 @@
         <input type="file" id="pdf-input" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" />
       </label>
       <button class="btn" id="toggle-box-btn" disabled>+ Posicionar Quadro</button>
+      <button class="btn" id="delete-selection-btn" disabled>Excluir selecionado</button>
+      <button class="btn" id="clear-btn" disabled>Limpar / Novo</button>
+      <label for="export-format" style="font-size:.8rem;color:var(--text-muted)">Saída</label>
+      <select id="export-format" class="btn" aria-label="Formato de saída">
+        <option value="pdf">PDF</option>
+        <option value="png">PNG</option>
+        <option value="jpg">JPG</option>
+      </select>
       <button class="btn btn-primary" id="download-btn" disabled>Salvar PDF</button>
     </div>
   </header>
@@ -141,10 +152,12 @@
     </div>
 
     <div id="pages-container"></div>
+    <div id="export-results" aria-live="polite" style="display:none;max-width:800px;width:100%;padding:16px;margin-top:12px;background:var(--bg-panel);border:1px solid var(--border);border-radius:8px"></div>
   </main>
 
   <div id="stamp-box">
-    <button id="load-png-btn">carregar PNG</button>
+    <button id="load-png-btn">Carregar JPG / PNG</button>
+    <button id="close-stamp-btn" title="Excluir quadro de posicionamento" aria-label="Excluir quadro">×</button>
   </div>
 
   <input type="file" id="stamp-file-input" accept="image/png, image/jpeg" />
@@ -155,12 +168,18 @@
     let pdfArrayBuffer = null;
     let fabricCanvases = [];
     let pageElements = [];
+    let exportUrls = [];
 
     const dropZone = document.getElementById('drop-zone');
     const pdfInput = document.getElementById('pdf-input');
     const pagesContainer = document.getElementById('pages-container');
     const toggleBoxBtn = document.getElementById('toggle-box-btn');
     const downloadBtn = document.getElementById('download-btn');
+    const deleteSelectionBtn = document.getElementById('delete-selection-btn');
+    const clearBtn = document.getElementById('clear-btn');
+    const exportFormat = document.getElementById('export-format');
+    const exportResults = document.getElementById('export-results');
+    const closeStampBtn = document.getElementById('close-stamp-btn');
     
     const stampBox = document.getElementById('stamp-box');
     const loadPngBtn = document.getElementById('load-png-btn');
@@ -187,6 +206,8 @@
 
       toggleBoxBtn.disabled = true;
       downloadBtn.disabled = true;
+      clearExportResults();
+      stampBox.style.display = "none";
       try {
         let sourceBytes = await file.arrayBuffer();
         if (!isPdf) {
@@ -213,6 +234,7 @@
     }
 
     async function handlePdfDocument(sourceBytes) {
+      for (const canvas of fabricCanvases) canvas.dispose();
       pdfArrayBuffer = sourceBytes;
       dropZone.style.display = 'none';
       
@@ -233,6 +255,8 @@
 
       toggleBoxBtn.disabled = false;
       downloadBtn.disabled = false;
+      clearBtn.disabled = false;
+      updateDeleteButton();
     }
 
     async function renderPage(pdfDoc, pageNum) {
@@ -262,6 +286,9 @@
         selection: true
       });
 
+      fCanvas.on("selection:created", updateDeleteButton);
+      fCanvas.on("selection:updated", updateDeleteButton);
+      fCanvas.on("selection:cleared", updateDeleteButton);
       fabricCanvases.push(fCanvas);
       pageElements.push(wrapper);
     }
@@ -273,12 +300,66 @@
       stampBox.style.display = 'flex';
     });
 
+    closeStampBtn.addEventListener('click', () => { stampBox.style.display = 'none'; });
+    exportFormat.addEventListener('change', () => {
+      downloadBtn.textContent = 'Salvar ' + exportFormat.value.toUpperCase();
+      clearExportResults();
+    });
+
+    function updateDeleteButton() {
+      deleteSelectionBtn.disabled = !fabricCanvases.some(canvas => canvas.getActiveObjects().length > 0);
+    }
+    function deleteSelectedObjects() {
+      for (const canvas of fabricCanvases) {
+        const selected = canvas.getActiveObjects();
+        if (!selected.length) continue;
+        canvas.discardActiveObject();
+        selected.forEach(obj => canvas.remove(obj));
+        canvas.requestRenderAll();
+      }
+      updateDeleteButton();
+    }
+    deleteSelectionBtn.addEventListener('click', deleteSelectedObjects);
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable) return;
+      if (fabricCanvases.some(canvas => canvas.getActiveObjects().length)) {
+        e.preventDefault();
+        deleteSelectedObjects();
+      } else if (stampBox.style.display === 'flex' && e.key === 'Delete') {
+        e.preventDefault();
+        stampBox.style.display = 'none';
+      }
+    });
+    function clearExportResults() {
+      exportUrls.forEach(url => URL.revokeObjectURL(url));
+      exportUrls = [];
+      exportResults.replaceChildren();
+      exportResults.style.display = 'none';
+    }
+    clearBtn.addEventListener('click', () => {
+      for (const canvas of fabricCanvases) canvas.dispose();
+      fabricCanvases = [];
+      pageElements = [];
+      pdfArrayBuffer = null;
+      pagesContainer.replaceChildren();
+      clearExportResults();
+      pdfInput.value = '';
+      stampFileInput.value = '';
+      stampBox.style.display = 'none';
+      dropZone.style.display = 'flex';
+      toggleBoxBtn.disabled = true;
+      downloadBtn.disabled = true;
+      clearBtn.disabled = true;
+      updateDeleteButton();
+    });
+
     // Mover o Quadro Flutuante
     let isDragging = false;
     let startX, startY, initialLeft, initialTop;
 
     stampBox.addEventListener('mousedown', (e) => {
-      if (e.target === loadPngBtn) return;
+      if (e.target.closest("button")) return;
       isDragging = true;
       startX = e.clientX;
       startY = e.clientY;
@@ -360,58 +441,115 @@
         }
 
         if (!inserted) {
-          alert("Posicione o quadro diretamente sobre uma página do PDF antes de carregar o PNG.");
+          alert("Posicione o quadro sobre uma página antes de inserir a imagem.");
         }
       };
       reader.readAsDataURL(file);
       e.target.value = '';
     });
 
-    // Salvar PDF Final Modificado
-    downloadBtn.addEventListener('click', async () => {
-      if (!pdfArrayBuffer) return;
+    function downloadBlob(blob, name) {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
 
-      const { PDFDocument } = PDFLib;
-      const pdfDoc = await PDFDocument.load(pdfArrayBuffer);
+    async function generateEditedPdf() {
+      const pdfDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer);
       const pages = pdfDoc.getPages();
-
       for (let i = 0; i < pages.length; i++) {
         const page = pages[i];
         const fCanvas = fabricCanvases[i];
         const objects = fCanvas.getObjects();
-
-        if (objects.length === 0) continue;
-
-        const pdfWidth = page.getWidth();
-        const pdfHeight = page.getHeight();
-        const scaleX = pdfWidth / fCanvas.width;
-        const scaleY = pdfHeight / fCanvas.height;
-
+        if (!objects.length) continue;
+        const pdfWidth = page.getWidth(), pdfHeight = page.getHeight();
+        const scaleX = pdfWidth / fCanvas.width, scaleY = pdfHeight / fCanvas.height;
         for (const obj of objects) {
           const objectDataUrl = obj.toDataURL({ format: 'png', multiplier: 2 });
           const pngImage = await pdfDoc.embedPng(objectDataUrl);
           const rect = obj.getBoundingRect();
-
-          const elementWidth = rect.width * scaleX;
-          const elementHeight = rect.height * scaleY;
-          const elementX = rect.left * scaleX;
-          const elementY = pdfHeight - (rect.top * scaleY) - elementHeight;
-
+          const width = rect.width * scaleX, height = rect.height * scaleY;
           page.drawImage(pngImage, {
-            x: elementX,
-            y: elementY,
-            width: elementWidth,
-            height: elementHeight
+            x: rect.left * scaleX,
+            y: pdfHeight - rect.top * scaleY - height,
+            width, height
           });
         }
       }
+      return await pdfDoc.save();
+    }
 
-      const pdfBytes = await pdfDoc.save();
-      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = 'documento_assinado.pdf';
-      link.click();
+    function canvasToBlob(canvas, mime, quality) {
+      return new Promise((resolve, reject) =>
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Falha ao gerar a imagem')), mime, quality)
+      );
+    }
+
+    async function exportAsImages(format) {
+      const mime = format === 'png' ? 'image/png' : 'image/jpeg';
+      const images = [];
+      for (let i = 0; i < pageElements.length; i++) {
+        const background = pageElements[i].querySelector('canvas');
+        const fabricCanvas = fabricCanvases[i];
+        // Composição no navegador: PDF original + edições da camada Fabric.
+        const result = document.createElement('canvas');
+        result.width = background.width;
+        result.height = background.height;
+        const ctx = result.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, result.width, result.height);
+        ctx.drawImage(background, 0, 0);
+        ctx.drawImage(fabricCanvas.toCanvasElement(), 0, 0, result.width, result.height);
+        const blob = await canvasToBlob(result, mime, 0.92);
+        images.push({ blob, name: 'pagina-' + String(i + 1).padStart(3, '0') + '.' + format });
+      }
+      if (images.length === 1) {
+        downloadBlob(images[0].blob, images[0].name);
+      } else {
+        exportResults.replaceChildren();
+        const intro = document.createElement('p');
+        intro.textContent = images.length + ' páginas convertidas. Baixe cada imagem:';
+        intro.style.marginBottom = '10px';
+        exportResults.appendChild(intro);
+        for (const item of images) {
+          const url = URL.createObjectURL(item.blob);
+          exportUrls.push(url);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = item.name;
+          a.textContent = 'Baixar ' + item.name;
+          a.className = 'btn';
+          a.style.margin = '4px';
+          exportResults.appendChild(a);
+        }
+        exportResults.style.display = 'block';
+        exportResults.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+
+    downloadBtn.addEventListener('click', async () => {
+      if (!pdfArrayBuffer) return;
+      downloadBtn.disabled = true;
+      clearExportResults();
+      try {
+        const format = exportFormat.value;
+        if (format === 'pdf') {
+          const bytes = await generateEditedPdf();
+          downloadBlob(new Blob([bytes], { type: 'application/pdf' }), 'documento_editado.pdf');
+        } else {
+          await exportAsImages(format);
+        }
+      } catch (error) {
+        console.error('Erro ao exportar:', error);
+        alert('Não foi possível salvar o arquivo: ' + error.message);
+      } finally {
+        downloadBtn.disabled = false;
+      }
     });
   </script>
 </body>
